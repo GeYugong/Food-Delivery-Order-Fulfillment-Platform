@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ============================================================================
+  项目：基于设计模式实例库与模块化外卖订单履约平台
+  模块：父工程（聚合 + 依赖管理）
+  作者：课程大作业
+  说明：
+    1. 本 POM 为聚合（packaging=pom）工程，统一管理两个子模块：
+       - patterns            : 设计模式实例库，每个模式一个可独立运行的 Demo
+       - delivery-platform   : 综合业务系统（外卖订单履约平台）
+    2. 统一在此锁定 JDK 17、UTF-8 编码、JUnit 5 版本与插件版本，
+       子模块不重复声明版本，避免版本漂移。
+    3. 构建命令：
+       mvn -q clean package        # 编译 + 打包 + 运行全部测试
+       mvn -q -pl patterns exec:java 不在本工程使用，Demo 请用 java -cp 直接运行（见 README）
+  ============================================================================
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example.delivery</groupId>
+    <artifactId>food-delivery-platform</artifactId>
+    <version>1.0.0</version>
+    <packaging>pom</packaging>
+
+    <name>food-delivery-platform</name>
+    <description>基于设计模式实例库与模块化外卖订单履约平台（Java 17 + Maven 多模块）</description>
+
+    <!-- ==================== 子模块聚合 ==================== -->
+    <modules>
+        <!-- 设计模式实例库：19 个模式，每个模式一个可运行 Demo -->
+        <module>patterns</module>
+        <!-- 综合业务系统：外卖订单履约平台（控制台版） -->
+        <module>delivery-platform</module>
+    </modules>
+
+    <!-- ==================== 全局属性 ==================== -->
+    <properties>
+        <java.version>17</java.version>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <!-- 源码统一 UTF-8，保证中文注释在各种平台都正确编译 -->
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+        <junit.version>5.10.2</junit.version>
+        <!-- 与 JUnit 5.10.2 配套的 Platform 版本（Launcher 用于命令行测试运行器 ConsoleTestRunner） -->
+        <junit.platform.version>1.10.2</junit.platform.version>
+        <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
+        <maven-surefire-plugin.version>3.2.5</maven-surefire-plugin.version>
+    </properties>
+
+    <!-- ==================== 依赖版本统一管理 ==================== -->
+    <dependencyManagement>
+        <dependencies>
+            <!-- JUnit 5：聚合依赖，含 api + engine + params -->
+            <dependency>
+                <groupId>org.junit.jupiter</groupId>
+                <artifactId>junit-jupiter</artifactId>
+                <version>${junit.version}</version>
+                <scope>test</scope>
+            </dependency>
+            <!--
+              JUnit Platform Launcher：仅用于项目自带的「命令行测试运行器」ConsoleTestRunner。
+              它<b>不在</b> junit-jupiter 的传递依赖里（surefire 运行时由自己注入），
+              因此要显式声明，否则 test 源码树里引用 Launcher API 会编译失败。
+            -->
+            <dependency>
+                <groupId>org.junit.platform</groupId>
+                <artifactId>junit-platform-launcher</artifactId>
+                <version>${junit.platform.version}</version>
+                <scope>test</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <!-- 所有模块都需要 JUnit 5 做测试 -->
+    <dependencies>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <!-- ==================== 构建插件 ==================== -->
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>${maven-compiler-plugin.version}</version>
+                    <configuration>
+                        <release>17</release>
+                        <encoding>UTF-8</encoding>
+                        <!-- 保留参数名，便于反射/调试时看到有意义的形参名 -->
+                        <parameters>true</parameters>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>${maven-surefire-plugin.version}</version>
+                    <configuration>
+                        <!-- 控制台中文输出不乱码 -->
+                        <argLine>-Dfile.encoding=UTF-8</argLine>
+                        <!--
+                          ConsoleTestRunner 不是测试类，而是「不依赖 Maven 的命令行测试运行器」，
+                          它只含 main 方法，没有 @Test，因此排除掉，避免 surefire 试图当作测试类加载。
+                          它位于 patterns 模块的 test 源码树中，因为它需要 junit-platform-launcher
+                          （该依赖由 junit-jupiter 传递引入，不出现在 delivery-platform 的测试 classpath 上）。
+                        -->
+                        <excludes>
+                            <exclude>**/ConsoleTestRunner.java</exclude>
+                        </excludes>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

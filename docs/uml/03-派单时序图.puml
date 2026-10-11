@@ -1,0 +1,179 @@
+@startuml 派单时序图
+' ============================================================================
+'  外卖订单履约平台 —— 「派单与配送」时序图
+'  覆盖环节：支付完成 → 事件通知 → 派单中介 → 骑手调度策略 → 状态流转
+'            → 订单与骑手双向更新 → 取餐 → 送达 → 释放骑手负载
+'  设计中体现的模式：中介者、策略、状态、观察者、备忘录
+' ============================================================================
+
+skinparam shadowing false
+skinparam defaultFontName "Microsoft YaHei"
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 12
+skinparam BoxPadding 6
+
+title 外卖订单履约平台 · 派单与配送时序图
+
+actor "运营/用户" as Operator
+participant "ConsoleUI" as UI
+participant "OrderFacade\n【外观】" as Facade
+participant "DispatchCenter\n【中介者 Mediator】" as Center
+participant "DispatchStrategy\n【策略 Strategy】" as Strategy
+participant "OrderStore\n【仓储】" as OrderStore
+participant "RiderStore\n【骑手仓储】" as RiderStore
+participant "Order\n【状态模式】" as Order
+participant "Rider\n【record 不可变】" as Rider
+participant "DomainEventPublisher\n【观察者 Subject】" as Publisher
+participant "商家端 / 骑手端 / 用户短信 / 报表 / 审计" as Listeners
+
+== 前置：支付完成（适配器模式产出统一支付记录） ==
+Operator -> UI : 选择待支付订单 + 支付渠道
+UI -> Facade : pay(orderId, PaymentMethod)
+activate Facade
+Facade -> Facade : gatewayRegistry.require(method)\n【适配器模式】取统一支付网关
+Facade -> Facade : gateway.pay(orderId, amount, userId)\n微信=分/报文、支付宝=元/字符串、银行=分/错误码
+Facade -> Order : markPaid(method, tradeNo)
+Order -> Order : transitionTo(PAID, "支付成功")
+Facade -> Publisher : publishFor(order, "OrderPaid", 金额+流水号)
+Publisher -> Listeners : 支付成功通知
+Facade --> UI : 已支付订单
+deactivate Facade
+
+== 阶段一：发起派单（中介者模式） ==
+Operator -> UI : 点击「派单」（可选调度策略）
+UI -> Facade : dispatch(orderId)
+activate Facade
+Facade -> Center : dispatch(orderId)
+activate Center
+Note over Center
+  **中介者模式（Mediator）**
+  订单、商家、骑手之间没有任何直接引用，
+  全部通过派单中心转发（星形拓扑，3 条链路而非两两耦合的 6 条）
+end Note
+
+Center -> OrderStore : findById(orderId)
+OrderStore --> Center : Order
+Center -> Center : 前置校验：status == PAID ?
+alt 状态不是「已支付」
+  Center --> Facade : DispatchOutcome(失败, "只有[已支付]的订单可以派单")
+  Facade --> UI : 提示用户（重试无意义）
+else 状态合法
+  Center -> RiderStore : findAvailable()
+  RiderStore --> Center : 可接单骑手列表（空闲 且 未满载）
+end
+
+== 阶段二：骑手调度（策略模式 + 多策略回退） ==
+alt 无可用骑手
+  Center -> Center : 记录轨迹「候选骑手 0 名」
+  Center -> Publisher : publishFor(order, "OrderDispatchFailed", 原因)
+  Publisher -> Listeners : 派单失败通知（商家端提示暂无骑手）
+  Center --> Facade : DispatchOutcome(失败, "当前没有可接单的骑手")
+  Note right of Center
+    业务语义：失败原因要能区分「无运力」与「状态不对」，
+    因此返回 DispatchOutcome 而不是 boolean
+  end Note
+else 有候选骑手
+  loop 按策略链依次尝试（首选 → 回退降级）
+    Center -> Strategy : pick(candidates, order)
+    activate Strategy
+    Strategy -> Strategy : 最近优先：min(distance)\n最少负载：min(currentLoad, distance)\n评分最高：max(rating, -distance)
+    Strategy --> Center : 选中的 Rider（可能为 null）
+    deactivate Strategy
+    alt 未选出
+      Center -> Center : 记录轨迹「本策略未选出，回退下一策略」
+    else 选出骑手
+      Center -> Center : 记录轨迹「策略 X 选中骑手 Y」
+    end
+  end
+end
+
+== 阶段三：绑定订单与骑手（双向更新 + 状态流转） ==
+Center -> Order : assignRider(rider)
+activate Order
+Order -> Order : transitionTo(ASSIGNED, "骑手接单")
+Note right of Order
+  **状态模式**：PAID → {ASSIGNED, CANCELLED}
+  非法流转（如 DRAFT → ASSIGNED）在此被拦下
+end Note
+Order --> Center : 状态 = 已接单
+deactivate Order
+Center -> OrderStore : save(order)
+Center -> Rider : acceptOrder()
+activate Rider
+Rider --> Center : 新 Rider 对象（currentLoad+1，状态=派送中）
+deactivate Rider
+Note over Rider
+  **record 不可变**：骑手状态变更 = 产生新对象并覆盖式回写仓储，
+  天然避免「同一骑手对象被多处并发修改」
+end Note
+Center -> RiderStore : save(rider.acceptOrder())
+
+Center -> Publisher : publishFor(order, "OrderDispatched", 骑手信息)
+Publisher -> Listeners : 骑手端推送 / 用户短信 / 报表采集 / 审计留痕
+Center --> Facade : DispatchOutcome(成功, riderId, strategy, 轨迹)
+deactivate Center
+Facade --> UI : 展示派单轨迹与结果
+deactivate Facade
+
+== 阶段四：取餐与送达（状态模式 + 备忘录 + 观察者） ==
+Operator -> UI : 骑手已取餐
+UI -> Facade : startDelivery(orderId)
+activate Facade
+Facade -> Facade : memoManager.backup(order, "骑手取餐前")\n【备忘录模式】记录快照
+Facade -> Order : OrderState.of(order).startDelivery(order)
+Order -> Order : transitionTo(DELIVERING, "骑手已取餐")
+Facade -> OrderStore : save(order)
+Facade -> Publisher : publishFor(order, "OrderDelivering", 骑手信息)
+Facade --> UI : 配送中订单
+deactivate Facade
+
+Operator -> UI : 确认送达
+UI -> Facade : complete(orderId)
+activate Facade
+Facade -> Facade : backup(order, "送达确认前")【备忘录】
+Facade -> Order : OrderState.of(order).complete(order)
+Order -> Order : transitionTo(COMPLETED, "订单送达")
+Facade -> OrderStore : save(order)
+Facade -> Center : releaseRider(riderId)
+activate Center
+Center -> RiderStore : findById(riderId)
+Center -> Rider : finishOrder()
+Rider --> Center : 新 Rider（currentLoad-1，负载为 0 则回到空闲）
+Center -> RiderStore : save(freed)
+Center --> Facade : 释放后的骑手描述
+deactivate Center
+Facade -> Publisher : publishFor(order, "OrderCompleted", 实付金额 + 负载释放)
+Publisher -> Listeners : 用户短信「已送达」/ 报表营业额累加 / 审计
+Facade --> UI : 已完成订单
+deactivate Facade
+
+== 阶段五：可选撤销（备忘录模式） ==
+Operator -> UI : 误操作，撤销上一步
+UI -> Facade : undo(orderId)
+activate Facade
+Facade -> Facade : memoManager.undo(order)
+Facade -> Order : restore(snapshot)
+Order -> Order : 整体状态替换\n（状态、明细、金额、渠道、骑手、时间戳、取消原因）
+Facade -> OrderStore : save(order)
+Facade --> UI : 「已撤销到快照 MEMO-XXXXXX，当前状态：已接单」
+deactivate Facade
+Note over Facade
+  **备忘录模式**：负责人（OrderMemoManager）只存取快照、
+  绝不窥探内容；发起人（Order）自己负责生成与恢复。
+  快照必须覆盖全部可变状态，否则回滚会「回一半」。
+end Note
+
+== 阶段六：归档与报表（模板方法 + 访问者） ==
+Operator -> UI : 查看统计报表并归档
+UI -> Facade : archiveOrders()
+Facade -> OrderStore : archiveBefore(now)【模板方法骨架：筛选 → 终态判定 → archive()】
+OrderStore --> Facade : 归档数量
+UI -> Facade : reportService.generate()
+Facade -> Listeners : （报表访问者遍历订单）
+Note over Listeners
+  **访问者模式**：order.accept(new ReportVisitor())
+  双分派 → 营业额 / 客单价 / 菜品销量榜 / 骑手接单榜 / 大额订单
+  新增指标只加访问者类，订单聚合零改动
+end Note
+
+@enduml

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ============================================================================
+  模块：delivery-platform —— 综合业务系统（外卖订单履约平台）
+  说明：
+    本模块是设计模式的综合应用，负责跑通完整业务闭环：
+      用户下单 → 订单构建 → 校验链 → 计价策略 → 优惠券解释 → 支付适配
+      → 状态流转 → 事件通知 → 派单中介 → 骑手调度 → 订单存档 → 统计报表
+    运行方式（在仓库根目录，先 mvn -q package）：
+      java -cp delivery-platform\target\classes com.example.delivery.app.DeliveryPlatformApplication
+  ============================================================================
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.example.delivery</groupId>
+        <artifactId>food-delivery-platform</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>delivery-platform</artifactId>
+    <packaging>jar</packaging>
+    <name>delivery-platform</name>
+    <description>外卖订单履约平台：领域模型 + 设计模式 + 控制台应用</description>
+</project>

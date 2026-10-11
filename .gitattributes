@@ -1,0 +1,26 @@
+# ============================================================================
+#  Git 换行与编码约束
+#
+#  为什么要专门约束 .cmd：
+#  Windows 的 cmd.exe 按系统 ANSI 代码页（中文 Windows 为 GBK）解码批处理文件。
+#  如果 mvnw.cmd 被保存成 UTF-8（含中文注释）或 LF 换行，cmd 会错误解析：
+#    - rem 行会「吞掉」下一行命令  →  setlocal 变成 tlocal
+#    - %MAVEN_HOME% 被切碎         →  AVEN_HOME*
+#  因此必须强制 CRLF，且该文件保持纯 ASCII。
+# ============================================================================
+
+# 批处理脚本一律使用 CRLF，禁止 Git 自动转换
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Java / Maven / 文档使用 LF 即可（源码本身是 UTF-8，与 cmd 无关）
+*.java text eol=lf
+*.xml  text eol=lf
+*.md   text eol=lf
+*.puml text eol=lf
+
+# 二进制产物不做换行转换
+*.jar binary
+*.png binary
+*.jpg binary
+*.docx binary

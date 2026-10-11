@@ -1,0 +1,159 @@
+@startuml 下单时序图
+' ============================================================================
+'  外卖订单履约平台 —— 「用户下单」时序图
+'  覆盖环节：用户下单 → 订单构建 → 校验链 → 计价策略 → 优惠券解释 → 库存预占
+'            → 状态流转 → 事件通知
+'  设计中体现的模式：外观、建造者、职责链、策略、解释器、状态、观察者、单例
+' ============================================================================
+
+skinparam shadowing false
+skinparam defaultFontName "Microsoft YaHei"
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 12
+skinparam BoxPadding 6
+
+title 外卖订单履约平台 · 下单时序图
+
+actor 用户 as User
+participant "ConsoleUI\n(控制台界面)" as UI
+participant "OrderFacade\n【外观 Facade】" as Facade
+participant "Order\n【聚合根 + 建造者/状态/原型/备忘录/访问者】" as Order
+participant "ValidatorChainFactory\n【职责链组装】" as ChainFactory
+participant "OrderValidator 链\n【职责链 Handler】" as Chain
+participant "InventoryService\n【单例】" as Inventory
+participant "PricingContext\n【策略 Context】" as Pricing
+participant "CouponRuleInterpreter\n【解释器】" as Interpreter
+participant "InMemoryOrderStore\n【单例 + 模板方法】" as Store
+participant "DomainEventPublisher\n【观察者 Subject】" as Publisher
+participant "OrderEventListener ×5\n【观察者 Observer】" as Listeners
+
+== 阶段一：选择商品并构建订单（建造者模式） ==
+User -> UI : 选择用户 / 商家 / 菜品 / 数量
+UI -> Facade : create(userId, merchantId)
+activate Facade
+Facade -> Store : findById / findAll（取用户与商家）
+Store --> Facade : User、Merchant
+Facade -> Order : new OrderBuilder().customer().merchant()\n.deliveryAddress().build()
+activate Order
+Note right of Order
+  **建造者模式**
+  build() 内统一校验不变量：
+  1) 必填项非空；2) 明细必须属于同一商家
+end Note
+Order --> Facade : 草稿订单（DRAFT）
+deactivate Order
+Facade -> Store : save(order)
+Facade --> UI : Order
+deactivate Facade
+
+loop 每加一道菜
+  User -> UI : 选择菜品与数量
+  UI -> Facade : addDish(orderId, dishId, quantity)
+  Facade -> Order : addItem(OrderItem)
+  Note right of Order
+    同名菜品自动合并为一行（数量累加）；
+    非草稿态直接抛 IllegalOrderStateException
+  end Note
+  Facade -> Store : save(order)
+end
+
+== 阶段二：提交订单 —— 校验链（职责链模式） ==
+User -> UI : 点击「提交订单」（可选择优惠券）
+UI -> Facade : submit(orderId, couponId)
+activate Facade
+
+Facade -> ChainFactory : defaultChain(inventory)
+activate ChainFactory
+ChainFactory -> Chain : new EmptyOrderValidator()\n.setNext(起送价).setNext(库存)\n.setNext(地址).setNext(频控).setNext(风控)
+ChainFactory --> Facade : 链首 Handler
+deactivate ChainFactory
+
+Facade -> Chain : validate(context)
+activate Chain
+Chain -> Chain : EmptyOrderValidator.check()\n「无菜品 / 数量非法」→ 否决
+Chain -> Chain : MinimumAmountValidator.check()\n「小计 &lt; 商家起送价」→ 否决
+Chain -> Inventory : remaining(dishId)
+Inventory --> Chain : 剩余库存
+Chain -> Chain : StockValidator.check()\n「库存不足」→ 否决
+Chain -> Chain : AddressValidator.check()\n「地址为空/过短」→ 否决
+Chain -> Chain : FrequencyLimitValidator.check()\n「1 分钟内下单 ≥ 3 次」→ 否决
+Chain -> Chain : RiskControlValidator.check()\n「实付 ≥ 500 元」→ 否决
+Chain --> Facade : 全部通过（任一环否决则抛 OrderValidationException）
+deactivate Chain
+Note over Facade, Chain
+  **职责链模式**
+  排序原则：先廉价后昂贵（金额比较 → 库存查询 → 地图 → 频控 → 风控）；
+  轨迹由 collectTrace() 汇总，即使被拦下也能在控制台展示全过程。
+end Note
+
+== 阶段三：计价策略 + 优惠券解释（策略 + 解释器） ==
+Facade -> Pricing : deliveryFeeFor(order)
+activate Pricing
+Pricing -> Pricing : selectStrategy(order)\n会员满30 → 免配送费；雨天 → ×1.5；\n高峰 → +2 元；否则 → 基础阶梯价
+Pricing --> Facade : 配送费（如 0.00 元）
+deactivate Pricing
+Facade -> Order : setDeliveryFee(fee)
+
+Facade -> Interpreter : evaluateCoupon(coupon, order)
+activate Interpreter
+Interpreter -> Interpreter : parse(ruleExpression)
+Note right of Interpreter
+  **解释器模式**
+  递归下降解析：
+  or → and → primary(括号/条件)
+  条件支持：满X减Y / X折 / 会员等级比较 / 小计比较
+end Note
+Interpreter -> Interpreter : root.contribute(context)\n小计=56.00，等级=GOLD
+Interpreter --> Facade : 抵扣 5.00 元 + AST 说明
+deactivate Interpreter
+Facade -> Order : applyCoupon(couponId, discount)
+Note right of Order
+  三重保护：抵扣非负、不超过小计、两位小数
+end Note
+
+== 阶段四：库存预占 + 状态流转（状态模式） ==
+Facade -> Inventory : reserveAll(order)
+activate Inventory
+Note right of Inventory
+  全部成功才生效；任一菜品不足则回滚已预占部分
+  （两阶段语义，避免库存被慢慢吃掉）
+end Note
+Inventory --> Facade : true
+deactivate Inventory
+
+Facade -> Order : submit()
+activate Order
+Order -> Order : transitionTo(PENDING_PAYMENT, "用户提交订单")
+Note right of Order
+  **状态模式**
+  OrderStatus.canTransferTo 校验迁移矩阵：
+  DRAFT → {PENDING_PAYMENT, CANCELLED}
+  成功后返回领域事件名（观察者的事件源）
+end Note
+Order --> Facade : 状态 = 待支付
+deactivate Order
+
+== 阶段五：落库 + 事件通知（观察者模式） ==
+Facade -> Store : save(order)
+Facade -> Publisher : publishFor(order, "OrderSubmitted", 金额明细)
+activate Publisher
+Publisher -> Publisher : 复制订阅者快照（免疫回调中退订）
+Publisher -> Listeners : onEvent(event)
+activate Listeners
+Listeners -> Listeners : 用户短信 / 商家端 / 骑手端 / 统计报表 / 审计日志\n（各自只处理关心的事件类型）
+Listeners --> Publisher : 完成
+deactivate Listeners
+Note over Publisher, Listeners
+  **观察者模式**
+  订单服务只负责「发布」，不知道谁在听；
+  新增通知渠道 = 新增一个 OrderEventListener，业务代码零改动。
+  单个监听器异常被隔离，通知失败不影响下单主流程。
+end Note
+Publisher --> Facade : 通知完成
+deactivate Publisher
+
+Facade --> UI : 待支付订单（金额已算好）
+deactivate Facade
+UI --> User : 展示订单号、明细、小计、优惠、配送费、实付
+
+@enduml

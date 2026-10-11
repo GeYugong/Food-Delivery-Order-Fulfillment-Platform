@@ -1,0 +1,379 @@
+@startuml 核心类图
+' ============================================================================
+'  外卖订单履约平台 —— 核心类图
+'  渲染方式：
+'    1) IDEA 安装 PlantUML Integration 插件后直接打开本文件预览；
+'    2) 或使用在线服务：https://www.plantuml.com/plantuml/uml/ 粘贴本文件内容；
+'    3) 或命令行：java -jar plantuml.jar docs/uml/01-核心类图.puml
+'  说明：本图重点表现「领域模型 + 设计模式角色」两条主线，
+'        每个参与设计模式的类都用 note 标注了它在模式中的角色。
+' ============================================================================
+
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName "Microsoft YaHei"
+
+title 外卖订单履约平台 · 核心类图（领域模型 + 设计模式角色）
+
+' ============================ 领域层：订单聚合 ============================
+package "domain.order 订单聚合" #EEF5FF {
+
+  class Order <<聚合根 Aggregate Root>> {
+    - orderId : String
+    - customer : User
+    - merchant : Merchant
+    - items : List<OrderItem>
+    - status : OrderStatus
+    - discountAmount : BigDecimal
+    - deliveryFee : BigDecimal
+    - rider : Rider
+    - submittedAt / paidAt / assignedAt / completedAt / cancelledAt : Instant
+    + createDraft(user, merchant) : Order {static}
+    + addItem(item) : void
+    + subtotal() : BigDecimal
+    + totalAmount() : BigDecimal
+    + submit() : void
+    + markPaid(method, tradeNo) : void
+    + assignRider(rider) : void
+    + startDelivering() : void
+    + complete() : void
+    + cancel(reason) : void
+    + transitionTo(target, reason) : String
+    + snapshot() : OrderSnapshot
+    + restore(snapshot) : void
+    + copyAsDraft(newId) : Order
+    + accept(visitor) : R
+  }
+
+  class OrderStatus <<枚举 + 状态迁移矩阵>> {
+    DRAFT
+    PENDING_PAYMENT
+    PAID
+    ASSIGNED
+    DELIVERING
+    COMPLETED
+    CANCELLED
+    + canTransferTo(target) : boolean
+    + nextStatuses() : Set<OrderStatus>
+    + cancellable() : boolean
+    + isFinalState() : boolean
+  }
+
+  class OrderState <<状态模式 State>> {
+    + of(status) : OrderState {static}
+    + submit(order) : void
+    + pay(order, method, tradeNo) : void
+    + assignRider(order, rider) : void
+    + startDelivery(order) : void
+    + complete(order) : void
+    + cancel(order, reason) : void
+    # reject(order, operation) : void
+  }
+
+  class OrderItem <<值对象 record>> {
+    + dishId : String
+    + dishName : String
+    + unitPrice : BigDecimal
+    + quantity : int
+    + subtotal() : BigDecimal
+    + withExtraQuantity(n) : OrderItem
+  }
+
+  class OrderSnapshot <<备忘录 Memento>> {
+    + orderId : String
+    + status : OrderStatus
+    + items : List<OrderItem>
+    + couponId / paymentMethod / paymentTradeNo : String
+    + discountAmount / deliveryFee : BigDecimal
+    + riderId : String
+    + submittedAt / paidAt / assignedAt / completedAt / cancelledAt : Instant
+    + cancelReason : String
+  }
+
+  interface OrderVisitor <<访问者 Visitor>> {
+    + visit(order : Order) : R
+  }
+
+  interface OrderRepository <<仓储端口>> {
+    + save(order) : void
+    + findById(orderId) : Order
+    + findByUser(user) : List<Order>
+    + findByStatus(status) : List<Order>
+    + archiveBefore(before : Instant) : int
+  }
+
+  interface OrderService <<应用服务端口>> {
+    + createOrder(userId, merchantId) : Order
+    + submitOrder(orderId, couponId) : Order
+    + payOrder(orderId, paymentMethod) : Order
+    + dispatch(orderId) : DispatchResult
+    + cancelOrder(orderId, reason) : Order
+  }
+}
+
+' ============================ 领域层：参与方 ============================
+package "domain 参与方" #F3FFF3 {
+  class User <<值对象 record>> {
+    + userId / name / phone / address : String
+    + balance : BigDecimal
+    + memberLevel : MemberLevel
+    + deductBalance(amount) : User
+  }
+  class Merchant <<值对象 record>> {
+    + merchantId / name / address : String
+    + dishes : List<Dish>
+    + minimumOrder / deliveryFee : BigDecimal
+    + sells(dishId) : boolean
+  }
+  class Dish <<组合模式 Leaf>> {
+    + dishId / name : String
+    + price : BigDecimal
+    + stock : int
+    + reduceStock(n) : Dish
+  }
+  class Rider <<值对象 record>> {
+    + riderId / name : String
+    + status : RiderStatus
+    + currentLoad / maxLoad : int
+    + canAccept() : boolean
+    + acceptOrder() : Rider
+    + finishOrder() : Rider
+  }
+  class Coupon <<解释器的规则载体>> {
+    + couponId / name : String
+    + ruleExpression : String
+    + discountAmount / threshold : BigDecimal
+    + validOnToday() : boolean
+  }
+  class Payment <<适配器产物 record>> {
+    + tradeNo / orderId : String
+    + amount : BigDecimal
+    + method : PaymentMethod
+    + status : PaymentStatus
+    + succeeded() : boolean
+  }
+}
+
+' ============================ 应用层 ============================
+package "application 应用层" #FFF8EE {
+  class OrderFacade <<外观模式 Facade>> {
+    + create(userId, merchantId) : Order
+    + addDish(orderId, dishId, qty) : Order
+    + submit(orderId, couponId) : Order
+    + pay(orderId, method) : Order
+    + dispatch(orderId) : DispatchOutcome
+    + startDelivery(orderId) : Order
+    + complete(orderId) : Order
+    + cancel(orderId, reason) : Order
+    + undo(orderId) : String
+    + archiveOrders() : int
+  }
+
+  class OrderValidator <<职责链 Handler>> {
+    # next : OrderValidator
+    + setNext(next) : OrderValidator
+    + validate(context) : void {final}
+    # check(context) : String {abstract}
+    # passToNext(context) : void
+  }
+
+  class EmptyOrderValidator
+  class MinimumAmountValidator
+  class StockValidator
+  class AddressValidator
+  class FrequencyLimitValidator
+  class RiskControlValidator
+
+  class DispatchCenter <<中介者 Mediator>> {
+    + useStrategy(strategy) : DispatchCenter
+    + dispatch(orderId) : DispatchOutcome
+    + assign(orderId, riderId) : DispatchOutcome
+    + releaseRider(riderId) : String
+  }
+
+  class OrderMemoManager <<备忘录 Caretaker>> {
+    + backup(order, reason) : String
+    + undo(order) : String
+    + historyOf(orderId) : List<String>
+  }
+
+  class ReportVisitor <<访问者 ConcreteVisitor>> {
+    + visit(order) : Void
+    + toReport() : StatisticsReport
+  }
+}
+
+' ============================ 领域端口（策略 / 观察者 / 支付） ============================
+package "domain.support 策略与端口" #F8F0FF {
+  interface PricingStrategy <<策略 Strategy>> {
+    + calculateDeliveryFee(order) : BigDecimal
+    + name() : String
+  }
+  class PricingContext <<策略上下文>> {
+    + useStrategy(strategy) : PricingContext
+    + withEnvironment(rainy, peakHour) : PricingContext
+    + deliveryFeeFor(order) : BigDecimal
+  }
+  interface DispatchStrategy <<策略 Strategy>> {
+    + pick(candidates, order) : Rider
+  }
+  interface PaymentGateway <<适配器 Target>> {
+    + channel() : String
+    + pay(orderId, amount, payerRef) : Payment
+  }
+  interface CouponEvaluator <<解释器边界>> {
+    + evaluate(order) : BigDecimal
+    + explain() : String
+  }
+  class DomainEventPublisher <<观察者 Subject>> {
+    + subscribe(listener) : void
+    + unsubscribe(listener) : boolean
+    + publish(event) : void
+  }
+  interface OrderEventListener <<观察者 Observer>> {
+    + onEvent(event) : void
+  }
+  class OrderEvent <<事件 record>>
+}
+
+' ============================ 基础设施层 ============================
+package "infrastructure 基础设施" #FFEFEF {
+  class InMemoryOrderStore <<单例 + 模板方法>> {
+    + getInstance() : InMemoryOrderStore {static}
+    + save(order) : void
+    + archive(order) : void
+    + archiveBefore(before) : int
+  }
+  class InventoryService <<单例>> {
+    + getInstance() : InventoryService {static}
+    + reserveAll(order) : boolean
+    + releaseAll(order) : void
+  }
+  class CouponRuleInterpreter <<解释器 Interpreter>> {
+    + evaluateCoupon(coupon, order) : BigDecimal
+    + parse(ruleText) : CouponExpression
+    + explain() : String
+  }
+  class CouponExpression <<抽象表达式>> {
+    + contribute(context) : BigDecimal {abstract}
+    + value(context) : BigDecimal
+    + text() : String {abstract}
+  }
+  class CouponRuleParser <<递归下降解析器>> {
+    + parseExpression() : CouponExpression
+  }
+  class PaymentGatewayRegistry <<注册表 + 单例>> {
+    + register(gateway) : PaymentGatewayRegistry
+    + require(method) : PaymentGateway
+  }
+  class WalletPaymentAdapter <<适配器>> 
+  class WechatPaymentAdapter <<适配器>>
+  class AlipayPaymentAdapter <<适配器>>
+  class BankCardPaymentAdapter <<适配器>>
+}
+
+' ============================ 关系 ============================
+Order "1" *-- "1..*" OrderItem : 组合（聚合内）
+Order --> "1" OrderStatus : 当前状态
+Order --> "0..1" Rider : 派单后持有
+Order ..> OrderState : 行为委托
+Order ..> OrderSnapshot : 生成/恢复（备忘录）
+Order ..> OrderVisitor : accept 双分派
+Order --> "1" User
+Order --> "1" Merchant
+Merchant "1" o-- "1..*" Dish : 菜单
+Coupon ..> CouponExpression : 规则被解析为
+
+OrderFacade ..> OrderValidator : 组装并执行校验链
+OrderFacade ..> PricingContext : 计算配送费
+OrderFacade ..> CouponEvaluator : 计算优惠
+OrderFacade ..> PaymentGatewayRegistry : 取支付适配器
+OrderFacade ..> DispatchCenter : 委托派单
+OrderFacade ..> OrderMemoManager : 记录/回滚快照
+OrderFacade --> InMemoryOrderStore
+OrderFacade --> InventoryService
+
+OrderValidator --> OrderValidator : next（链式）
+EmptyOrderValidator --|> OrderValidator
+MinimumAmountValidator --|> OrderValidator
+StockValidator --|> OrderValidator
+AddressValidator --|> OrderValidator
+FrequencyLimitValidator --|> OrderValidator
+RiskControlValidator --|> OrderValidator
+
+PricingContext o-- PricingStrategy
+DispatchCenter o-- DispatchStrategy
+DispatchCenter ..> OrderStore
+DispatchCenter ..> DomainEventPublisher
+
+CouponRuleInterpreter ..|> CouponEvaluator
+CouponRuleInterpreter ..> CouponRuleParser : 使用
+CouponRuleInterpreter ..> CouponExpression : 构建 AST
+CouponExpression <|-- CouponExpression.NumberLiteral
+CouponExpression <|-- CouponExpression.MemberLevelValue
+CouponExpression <|-- CouponExpression.SubtotalValue
+CouponExpression <|-- CouponExpression.FullReductionExpression
+CouponExpression <|-- CouponExpression.DiscountExpression
+CouponExpression <|-- CouponExpression.CompareExpression
+CouponExpression <|-- CouponExpression.AndExpression
+CouponExpression <|-- CouponExpression.OrExpression
+
+PaymentGatewayRegistry o-- PaymentGateway
+WalletPaymentAdapter ..|> PaymentGateway
+WechatPaymentAdapter ..|> PaymentGateway
+AlipayPaymentAdapter ..|> PaymentGateway
+BankCardPaymentAdapter ..|> PaymentGateway
+
+DomainEventPublisher o-- OrderEventListener
+DomainEventPublisher ..> OrderEvent
+ReportVisitor ..|> OrderVisitor
+InMemoryOrderStore ..|> OrderStore
+OrderFacade ..|> OrderService
+
+' ============================ 模式角色说明 ============================
+note right of Order
+  **建造者模式**：OrderBuilder 链式组装 + build() 统一校验不变量
+  **状态模式**：所有状态变更走 transitionTo，由 OrderStatus 矩阵把关
+  **原型模式**：copyAsDraft 实现「再来一单」
+  **备忘录模式**：snapshot / restore 支持撤销与存档
+  **访问者模式**：accept 提供双分派扩展点
+  **观察者模式**：状态变化产出领域事件名
+end note
+
+note right of OrderState
+  **状态模式（State）**
+  每个状态只覆盖自己允许的操作，默认一律拒绝。
+  优点：消除散落各处的 switch(status)；
+  代价：状态类数量随状态数增长。
+end note
+
+note bottom of OrderValidator
+  **职责链模式（Chain of Responsibility）**
+  顺序：非空 → 起送价 → 库存 → 地址 → 频控 → 风控
+  排序原则：先廉价后昂贵，一票否决。
+  轨迹收集：collectTrace() 让「卡在第几环」可见。
+end note
+
+note bottom of DispatchCenter
+  **中介者模式（Mediator）+ 策略模式（Strategy）**
+  订单、商家、骑手只与派单中心通信（星形拓扑），
+  具体挑人算法由 DispatchStrategy 外置并可运行期切换，
+  并支持多策略回退（首选失败则依次降级）。
+end note
+
+note bottom of CouponExpression
+  **解释器模式（Interpreter）**
+  终结符：NumberLiteral / MemberLevelValue / SubtotalValue
+  非终结符：FullReduction / Discount / Compare / And / Or
+  求值语义分离：value() 求值，contribute() 求优惠额。
+end note
+
+note bottom of OrderFacade
+  **外观模式（Facade）**
+  一条 submit() 隐藏「校验链 + 计价策略 + 优惠解释 + 库存预占 + 落库 + 发事件」六个子系统，
+  调用方（控制台）不接触任何子系统。
+end note
+
+@enduml

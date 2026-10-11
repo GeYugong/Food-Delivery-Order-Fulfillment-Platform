@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ============================================================================
+  模块：patterns —— 设计模式实例库
+  说明：
+    每个设计模式放在独立子包中，并提供一个带 main 方法的 *Demo 类，
+    可以单独运行、单独阅读，互不干扰；同时提供统一菜单入口 PatternShowcase。
+    运行方式（在仓库根目录，先 mvn -q package）：
+      方式一：java -cp patterns\target\classes com.example.patterns.creational.singleton.SingletonDemo
+      方式二：java -cp patterns\target\classes com.example.patterns.PatternShowcase   （交互式菜单）
+  ============================================================================
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.example.delivery</groupId>
+        <artifactId>food-delivery-platform</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>patterns</artifactId>
+    <packaging>jar</packaging>
+    <name>patterns</name>
+    <description>设计模式实例库：19 个模式，每个模式一个可独立运行的 Demo</description>
+
+    <!-- 本模块不依赖 delivery-platform，保证实例库纯净、可单独运行 -->
+</project>
