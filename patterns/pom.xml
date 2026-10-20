@@ -25,7 +25,7 @@
     <artifactId>patterns</artifactId>
     <packaging>jar</packaging>
     <name>patterns</name>
-    <description>设计模式实例库：19 个模式，每个模式一个可独立运行的 Demo</description>
+    <description>设计模式实例库：17 个可独立运行的 Demo，供统一菜单或独立入口调用</description>
 
     <!-- 本模块不依赖 delivery-platform，保证实例库纯净、可单独运行 -->
 </project>

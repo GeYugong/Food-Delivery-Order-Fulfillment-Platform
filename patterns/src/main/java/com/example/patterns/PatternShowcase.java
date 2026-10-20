@@ -28,8 +28,8 @@ import java.util.Scanner;
  *
  * <p><b>设计模式：简单工厂 / 注册表 + 外观</b></p>
  *
- * <p><b>为什么需要统一入口：</b>本模块有 17 个 Demo 类、覆盖 18 个设计模式
- * （解释器模式在 Demo 中同时演示了「解释器」与「访问者」的对比场景）。
+ * <p><b>为什么需要统一入口：</b>本模块有 17 个独立 Demo，分别展示 17 种设计模式。
+ * 全项目另在业务模块实现建造者与原型，共介绍 19 种 GoF 模式（GoF 共 23 种）。
  * 每个 Demo 都可以用 {@code java -cp patterns\target\classes 全限定名} 单独运行，
  * 但课堂演示时记住 17 条命令并不现实。</p>
  *
@@ -156,7 +156,7 @@ public final class PatternShowcase {
         System.out.println();
         System.out.println("╔══════════════════════════════════════════════════════════════════╗");
         System.out.println("║            设计模式实例库 · Design Pattern Showcase               ║");
-        System.out.println("║   17 个可独立运行的 Demo，覆盖 18 个设计模式（GoF 全谱）          ║");
+        System.out.println("║   17 个独立模式 Demo；全项目共介绍 19 种 GoF 模式                 ║");
         System.out.println("╚══════════════════════════════════════════════════════════════════╝");
     }
 

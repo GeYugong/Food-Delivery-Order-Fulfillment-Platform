@@ -37,13 +37,15 @@ public abstract class OrderValidator {
     /**
      * 设置下一个校验器。
      *
-     * <p><b>返回 {@code this}（链头）而不是 {@code next}：</b>这是一个很容易踩的坑——
-     * 若返回 {@code next}，写成 {@code a.setNext(b).setNext(c)} 时第二次调用会作用在
-     * <b>b</b> 上，看起来「链起来了」，实际上链条结构取决于返回值的语义，极易误用；
-     * 返回链头则语义唯一：{@code a.setNext(b).setNext(c)} 明确表示 a→b→c。</p>
+     * <p><b>返回 {@code this}（被调用的处理者）而不是 {@code next}：</b>
+     * 本方法只设置当前节点的下一位，不负责追加到链尾。因此
+     * {@code a.setNext(b).setNext(c)} 会覆盖 {@code a.next}，最终得到 a→c。
+     * 要组成 a→b→c，应逐节点调用 {@code a.setNext(b); b.setNext(c);}，
+     * 或使用 {@link ValidatorChainFactory#chainOf(OrderValidator...)}。
+     * 若另一种 API 返回 {@code next}，连续调用才会依次作用在 a、b 上；两种约定不可混用。</p>
      *
      * @param next 下一个校验器
-     * @return 链头（即本对象），便于链式声明 {@code a.setNext(b).setNext(c)}
+     * @return 本对象；不是新接入的节点，也不是整条链的尾节点
      */
     public OrderValidator setNext(OrderValidator next) {
         this.next = next;
